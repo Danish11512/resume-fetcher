@@ -78,3 +78,122 @@ graph LR
 - [x] Success Criterion measurable, mapped to tests 1-8
 - [x] One diagram, one concern
 - [x] Standalone: no references to or coupling with other Ashby tooling
+
+## Phase A — build verification (2026-10-02, independent re-check)
+
+Built by DevinScript (swe-2-high), commit `9d8a16c` "ashby job-list requirements extractor".
+Pipeline verdict PARTIAL — its own critique found only a test-count error. Independent results:
+
+CLAIM: "tests green, vet clean"
+EVIDENCE: `go vet ./...` -> clean; `go test ./...` -> `ok resume-updater 0.312s`;
+`go test -list` -> 15 test functions (pipeline claimed 14 — critique's correction right).
+VERDICT: VERIFIED
+
+CLAIM: "stdlib only, zero deps"
+EVIDENCE: `go list -deps` -> no external packages; alias regexes built with
+`regexp.QuoteMeta` (extract.go:44) — C++/C# safe from quantifier panics.
+VERDICT: VERIFIED
+
+CLAIM: "input = Ashby job list only; every job processed"
+EVIDENCE: parseInput modes: board URL / file / `-` stdin; no URL/id parsing anywhere;
+extractAll loops all jobs; multi-job attribution test passes (j1/j2 split correct).
+VERDICT: VERIFIED
+
+CLAIM: "live smoke, 3 input modes identical"
+EVIDENCE (fresh run, 2026-10-02): URL mode exit 0, 64 jobs; file and stdin modes
+byte-identical requirements.json (diff clean); per-job counts match the run's claims:
+Staff Product Engineer required=15 preferred=0; Staff Design Engineer required=4 preferred=7.
+VERDICT: VERIFIED
+
+CLAIM: "resume/ untouched, no agent comments"
+EVIDENCE: resume/ mtimes predate the run (Sep 2 / Oct 1 14:14); comment scan clean
+(sole grep hit = the `User-Agent` header string).
+VERDICT: VERIFIED
+
+Observations (not fixed, out of scope): (1) tool accepts the API-form URL
+(api.ashbyhq.com/posting-api/job-board/<org>); pasting the human URL
+jobs.ashbyhq.com/<org> fails decode with a clean error — could auto-translate later.
+(2) requirements.json/.md written to cwd are untracked (tool output, not project code).
+
+## Phase A — antagonize Mode V, round 2: attack the implementation (2026-10-02)
+
+Fresh probes against source (main.go, fetch.go, extract.go read in full) + live binary + live board JSON.
+
+CLAIM: "exit-code contract 0/1/2"
+EVIDENCE: no-args -> 2; missing file -> 2; dead-slug URL -> 1; stdin `{"jobs":null}` -> 1;
+stdin malformed JSON -> 1; `{"jobs":[]}` -> 0. All six as specified.
+VERDICT: VERIFIED
+
+CLAIM: "term extraction grounded (no hallucinated matches)"
+EVIDENCE: audit of live 64-job output: 413 recorded terms, 0 absent from their
+descriptionPlain (boundary-checked).
+VERDICT: VERIFIED
+
+CLAIM: "tests discriminate (not vacuous)"
+EVIDENCE: mutation — inlineCueRe neutered to `(zzznevermatch)` -> `--- FAIL:
+TestExtractInlineCue`, suite FAIL; reverted -> 15/15 pass, `git diff` clean on source.
+VERDICT: VERIFIED
+
+CLAIM: "extraction precision"
+EVIDENCE AGAINST: fixture + live-board audit — the `go` alias matches phrase
+usage. 26/26 jobs listing canonical Go on the ashby board are FALSE POSITIVES
+("go it alone", "ABOUT GO TO MARKET", "go-to-market side", "go-live", "go
+implement it") — none is the language; ashby eng stacks are TS/Node/React.
+Fixture confirms same class: "Please express interest" -> Express REQUIRED.
+Also: "Go experience plus Kubernetes knowledge" -> Kubernetes downgraded to
+preferred by the `plus` inline cue (whole-line downgrade); narrative paragraph
+after a "Nice to have:" header -> Python/Kubernetes marked preferred (sticky
+section state); empty descriptionPlain -> silent zero requirements with no
+warning (descriptionHtml fallback from the plan silently dropped).
+VERDICT: PARTIAL
+CORRECTION: `go` alias is poison (0% precision on this board) — drop `go`,
+keep `golang`; same class: `express` (require express.js/expressjs), `node`
+(require node.js/nodejs). Fix line-level cue scope (downgrade only after the
+cue, or only cue-led segments) and reset section state on blank-line+paragraph
+breaks. Emit a stderr note for jobs with empty descriptionPlain.
+
+Survived: exit codes, decode guards (null jobs / malformed / missing field),
+UA + 30s timeout, per-job attribution, dedupe, QuoteMeta alias escaping, term
+grounding, test-suite discrimination.
+
+## Phase B — build verification (2026-10-02, independent re-check)
+
+Target: Senior Product Engineer - Americas (751768c6). Built by DevinScript
+(swe-2-high); first attempt died INFRA (binary PDF passed as --context ->
+UnicodeDecodeError at startup; relaunched with text-only contexts). Deliverables:
+resume/tailored.tex, tailored.pdf, CHANGES.md; originals untouched.
+
+CLAIM: "text-only edits; preamble/macros/layout/structure untouched"
+EVIDENCE: byte-diff of everything up to \begin{document} -> PREAMBLE-IDENTICAL;
+set-diff of all \command tokens original vs tailored -> COMMANDS-IDENTICAL;
+12 changed lines = 6 old/new edit pairs.
+VERDICT: VERIFIED
+
+CLAIM: "compiles, page guard"
+EVIDENCE: fresh tectonic recompile of a copy in /tmp -> exit 0, 2 pages;
+qpdf --show-npages original=2 tailored=2. (mdls avoided per round-1 correction.)
+VERDICT: VERIFIED
+
+CLAIM: "required-term coverage, honest omissions"
+EVIDENCE: programmatic scan of tailored.tex: 13/15 required terms present
+(TypeScript x5, React x5, CI/CD x3, JavaScript/PostgreSQL/Notion x2,
+Node.js/GraphQL/REST/Redis/SQL/Snowflake/Jira x1); Kotlin and Swift = 0 mentions
+— matching CHANGES.md's declared omission (mobile work is React Native; JD does
+not require them).
+VERDICT: VERIFIED
+
+CLAIM: "no fabrication"
+EVIDENCE: CHANGES.md marks added terms (REST via "RESTful" on Flask work,
+GraphQL/Redis/Snowflake/Jira added to the Technologies list only, "no project
+claims"). Judgment call flagged for the user: Snowflake/Redis/Jira ride on
+adjacent-but-not-identical background (RDS/Cassandra data work, JPMC-scale
+tooling) — list-level additions, no invented projects/dates/employers.
+VERDICT: PARTIAL
+CORRECTION: the additions are defensible-but-speculative list entries; user
+should confirm or strike Snowflake/Redis/Jira from the Technologies line.
+
+Run-report inaccuracies (run's own critique caught): report said Languages
+reordered with SQL/PostgreSQL leading; actual tailored line is "TypeScript,
+JavaScript, Python, SQL, PostgreSQL, Bash, Java, C++, VBA" — CHANGES.md was
+accurate, the summary was not. Also: repo-root requirements.json had been left
+empty by the exit-code probe; regenerated from the live board (64 jobs).

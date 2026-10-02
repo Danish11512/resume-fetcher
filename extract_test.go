@@ -85,3 +85,63 @@ func TestExtractEmpty(t *testing.T) {
 		t.Fatalf("expected no requirements, got %#v", reqs)
 	}
 }
+
+func TestGoPhraseBlacklist(t *testing.T) {
+	desc := "ABOUT GO TO MARKET\nWe go to market fast. You prefer to go it alone. Ready to go beyond and go live.\nRequirements:\n- 5+ years with Go\n- Golang services\n"
+	reqs := newExtractor().Extract(Job{ID: "1", DescriptionPlain: desc})
+	got := byCanonical(reqs)
+	r, ok := got["Go"]
+	if !ok {
+		t.Fatalf("Go missing despite language usage: %#v", reqs)
+	}
+	if r.Kind != "required" {
+		t.Errorf("Go kind = %q, want required", r.Kind)
+	}
+	if len(reqs) != 1 {
+		t.Errorf("expected exactly 1 requirement (Go), got %#v", reqs)
+	}
+}
+
+func TestExpressNodeBareNoMatch(t *testing.T) {
+	desc := "Please express interest. Each node of the graph matters. Express yourself clearly."
+	reqs := newExtractor().Extract(Job{ID: "1", DescriptionPlain: desc})
+	for _, r := range reqs {
+		if r.Canonical == "Express.js" || r.Canonical == "Node.js" {
+			t.Errorf("bare phrase matched %s: %#v", r.Canonical, reqs)
+		}
+	}
+}
+
+func TestExpressNodeRealMatch(t *testing.T) {
+	desc := "Requirements:\n- Express.js and Node.js experience\n"
+	reqs := newExtractor().Extract(Job{ID: "1", DescriptionPlain: desc})
+	got := byCanonical(reqs)
+	if _, ok := got["Express.js"]; !ok {
+		t.Errorf("Express.js missing: %#v", reqs)
+	}
+	if _, ok := got["Node.js"]; !ok {
+		t.Errorf("Node.js missing: %#v", reqs)
+	}
+}
+
+func TestDesignTerms(t *testing.T) {
+	desc := "Requirements:\n- Figma, Sketch, and prototyping skills\n- Wireframing and user research\n- Accessibility and WCAG knowledge\n"
+	reqs := newExtractor().Extract(Job{ID: "1", DescriptionPlain: desc})
+	got := byCanonical(reqs)
+	for _, want := range []string{"Figma", "Sketch", "Prototyping", "Wireframing", "User Research", "Accessibility", "WCAG"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("design term %s missing: %#v", want, reqs)
+		}
+	}
+}
+
+func TestHomeDesignTerms(t *testing.T) {
+	desc := "Experience with AutoCAD, Revit, and V-Ray for space planning and floor plans. BIM and CAD literacy expected.\n"
+	reqs := newExtractor().Extract(Job{ID: "1", DescriptionPlain: desc})
+	got := byCanonical(reqs)
+	for _, want := range []string{"AutoCAD", "Revit", "V-Ray", "Space Planning", "Floor Plan", "BIM", "CAD"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("home-design term %s missing: %#v", want, reqs)
+		}
+	}
+}

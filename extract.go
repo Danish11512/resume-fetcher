@@ -10,6 +10,10 @@ var headerRe = regexp.MustCompile(`(?i)^(requirements|qualifications|skills|what
 var prefHeaderRe = regexp.MustCompile(`(?i)^(nice to have|preferred|bonus)`)
 var inlineCueRe = regexp.MustCompile(`(?i)\b(preferred|bonus|plus|nice to have)\b`)
 
+// goPhraseRe: English phrases where the standalone word "go" is not the Go
+// language (RE2 has no lookaheads, so matches are post-filtered per line).
+var goPhraseRe = regexp.MustCompile(`(?i)go[- ]to[- ]market|go it alone|go[- ]live|go/no[- ]go|about go to|prefer to go|way we go|lets go|let's go|go beyond|go implement|go-getter`)
+
 type term struct {
 	canonical string
 	re        *regexp.Regexp
@@ -70,6 +74,9 @@ func (e *dictExtractor) Extract(j Job) []Requirement {
 		}
 		for _, tm := range e.terms {
 			if seen[tm.canonical] {
+				continue
+			}
+			if tm.canonical == "Go" && goPhraseRe.MatchString(t) {
 				continue
 			}
 			if sm := tm.re.FindStringSubmatch(t); sm != nil {
