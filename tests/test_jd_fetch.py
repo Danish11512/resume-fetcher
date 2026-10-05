@@ -9,37 +9,41 @@ import pytest
 import requests
 
 from jd_fetch import (
-    AshbyBoardSource, FetchBlocked, GreenhouseSource, JsonLdSource, StaticSource,
-    WebpageFetcher, get_page, main, render_markdown,
+    FetchBlocked, extract_ashby, extract_greenhouse, extract_jsonld,
+    extract_static, fetch, get_page, main, render_markdown, supports_ashby,
+    supports_greenhouse, supports_jsonld, supports_static,
 )
 
 
-class StubSource:
-    """Inert PageSource stub: preset supports flag, preset extract result/exc."""
+def stub_source(supports=False, result=None, exc=None):
+    """Inert source pair: preset supports flag, preset extract result/exc.
 
-    def __init__(self, supports=False, result=None, exc=None):
-        self._supports, self.result, self.exc = supports, result, exc
-        self.extract_calls = []
+    Returns (supports_fn, extract_fn, extract_calls).
+    """
+    calls = []
 
-    def supports(self, url, body):
-        return self._supports
+    def sup(url, body):
+        return supports
 
-    def extract(self, url, body):
-        self.extract_calls.append((url, body))
-        if self.exc is not None:
-            raise self.exc
-        return self.result
+    def ext(url, body):
+        calls.append((url, body))
+        if exc is not None:
+            raise exc
+        return result
+
+    return sup, ext, calls
 
 
 def test_fetch_returns_markdown_with_title_header():
-    src = StubSource(supports=True, result=("Eng Manager - EU", "<p>Write <b>go</b> code.</p>"))
-    fetcher = WebpageFetcher([src], page_get=lambda url: "<html/>")
+    sup, ext, calls = stub_source(
+        supports=True, result=("Eng Manager - EU", "<p>Write <b>go</b> code.</p>"))
 
-    md = fetcher.fetch("https://example.com/job")
+    md = fetch("https://example.com/job", sources=[(sup, ext)],
+               page_get=lambda url: "<html/>")
 
     assert md.startswith("# Eng Manager - EU")
     assert "Write **go** code." in md
-    assert src.extract_calls == [("https://example.com/job", "<html/>")]
+    assert calls == [("https://example.com/job", "<html/>")]
 
 
 def test_render_markdown_without_title_has_no_header():
@@ -70,24 +74,23 @@ LD_PAGE = (
 
 
 def test_jsonld_source_matches_and_extracts_jobposting():
-    src = JsonLdSource()
     url = "https://jobs.ashbyhq.com/ashby/abc"
 
-    assert src.supports(url, LD_PAGE)
-    assert src.extract(url, LD_PAGE) == ("Pilot Job", "<p>Do <b>things</b>.</p>")
+    assert supports_jsonld(url, LD_PAGE)
+    assert extract_jsonld(url, LD_PAGE) == ("Pilot Job", "<p>Do <b>things</b>.</p>")
 
 
 def test_jsonld_source_rejects_page_without_jobposting():
     body = "<html><body>shell</body></html>"
 
-    assert not JsonLdSource().supports("https://x/job", body)
+    assert not supports_jsonld("https://x/job", body)
     with pytest.raises(FetchBlocked) as exc_info:
-        JsonLdSource().extract("https://x/job", body)
+        extract_jsonld("https://x/job", body)
     assert exc_info.value.status == 200
 
 
 def test_jsonld_source_requires_body():
-    assert not JsonLdSource().supports("https://x/job", None)
+    assert not supports_jsonld("https://x/job", None)
 
 
 def test_jsonld_source_handles_type_list_array_toplevel_and_extra_attrs():
@@ -96,10 +99,9 @@ def test_jsonld_source_handles_type_list_array_toplevel_and_extra_attrs():
         '<script data-extra="1" type="application/ld+json">'
         '{"@type":["JobPosting"],"title":"T","description":"<p>D</p>"}</script>'
     )
-    src = JsonLdSource()
 
-    assert src.supports("https://x/job", body)
-    assert src.extract("https://x/job", body) == ("T", "<p>D</p>")
+    assert supports_jsonld("https://x/job", body)
+    assert extract_jsonld("https://x/job", body) == ("T", "<p>D</p>")
 
 
 BOARD = {"jobs": [
@@ -109,10 +111,8 @@ BOARD = {"jobs": [
 
 
 def test_board_source_is_url_decidable_without_body():
-    src = AshbyBoardSource()
-
-    assert src.supports("https://jobs.ashbyhq.com/ashby/abc-1", None)
-    assert not src.supports("https://example.com/careers/123", "<html/>")
+    assert supports_ashby("https://jobs.ashbyhq.com/ashby/abc-1", None)
+    assert not supports_ashby("https://example.com/careers/123", "<html/>")
 
 
 def test_board_source_extract_matches_job_id(monkeypatch):
@@ -122,7 +122,7 @@ def test_board_source_extract_matches_job_id(monkeypatch):
         return SimpleNamespace(status_code=200, content=json.dumps(BOARD).encode())
     monkeypatch.setattr(requests, "get", fake_get)
 
-    title, html = AshbyBoardSource().extract("https://jobs.ashbyhq.com/ashby/abc-1", None)
+    title, html = extract_ashby("https://jobs.ashbyhq.com/ashby/abc-1", None)
 
     assert (title, html) == ("Board Job", "<p>board desc</p>")
     assert seen["url"] == "https://api.ashbyhq.com/posting-api/job-board/ashby"
@@ -133,7 +133,7 @@ def test_board_source_ignores_query_string_in_job_id(monkeypatch):
         requests, "get",
         lambda url, **kw: SimpleNamespace(status_code=200, content=json.dumps(BOARD).encode()))
 
-    title, _ = AshbyBoardSource().extract(
+    title, _ = extract_ashby(
         "https://jobs.ashbyhq.com/ashby/abc-1?utm_source=x", None)
 
     assert title == "Board Job"
@@ -145,7 +145,7 @@ def test_board_source_blocks_when_id_missing(monkeypatch):
         lambda url, **kw: SimpleNamespace(status_code=200, content=json.dumps(BOARD).encode()))
 
     with pytest.raises(FetchBlocked):
-        AshbyBoardSource().extract(
+        extract_ashby(
             "https://jobs.ashbyhq.com/ashby/00000000-0000-0000-0000-000000000000", None)
 
 
@@ -153,11 +153,9 @@ GH_JOB = {"title": "Software Engineer, eve", "content": "<p>eve desc</p>"}
 
 
 def test_greenhouse_source_is_url_decidable_without_body():
-    src = GreenhouseSource()
-
-    assert src.supports("https://job-boards.greenhouse.io/vercel/jobs/6098390004", None)
-    assert src.supports("https://boards.greenhouse.io/vercel/jobs/6098390004", None)
-    assert not src.supports("https://example.com/careers/123", "<html/>")
+    assert supports_greenhouse("https://job-boards.greenhouse.io/vercel/jobs/6098390004", None)
+    assert supports_greenhouse("https://boards.greenhouse.io/vercel/jobs/6098390004", None)
+    assert not supports_greenhouse("https://example.com/careers/123", "<html/>")
 
 
 def test_greenhouse_source_extract_returns_title_and_content(monkeypatch):
@@ -167,7 +165,7 @@ def test_greenhouse_source_extract_returns_title_and_content(monkeypatch):
         return SimpleNamespace(status_code=200, content=json.dumps(GH_JOB).encode())
     monkeypatch.setattr(requests, "get", fake_get)
 
-    title, html = GreenhouseSource().extract(
+    title, html = extract_greenhouse(
         "https://job-boards.greenhouse.io/vercel/jobs/6098390004", None)
 
     assert (title, html) == ("Software Engineer, eve", "<p>eve desc</p>")
@@ -180,7 +178,7 @@ def test_greenhouse_source_blocks_on_api_failure(monkeypatch):
         lambda url, **kw: SimpleNamespace(status_code=404, content=b"not found"))
 
     with pytest.raises(FetchBlocked) as exc_info:
-        GreenhouseSource().extract("https://job-boards.greenhouse.io/x/jobs/1", None)
+        extract_greenhouse("https://job-boards.greenhouse.io/x/jobs/1", None)
 
     assert exc_info.value.status == 404
 
@@ -191,7 +189,7 @@ def test_greenhouse_source_blocks_on_missing_content(monkeypatch):
         lambda url, **kw: SimpleNamespace(status_code=200, content=b'{"title":"T"}'))
 
     with pytest.raises(FetchBlocked):
-        GreenhouseSource().extract("https://job-boards.greenhouse.io/x/jobs/1", None)
+        extract_greenhouse("https://job-boards.greenhouse.io/x/jobs/1", None)
 
 
 def test_get_page_decodes_unlabelled_utf8(monkeypatch):
@@ -204,24 +202,19 @@ def test_get_page_decodes_unlabelled_utf8(monkeypatch):
 
 
 def test_static_source_serves_ssr_body_but_never_ashby_or_bodiless():
-    src = StaticSource()
-
-    assert src.supports("https://example.com/job", "<p>x</p>")
-    assert src.extract("https://example.com/job", "<p>x</p>") == (None, "<p>x</p>")
-    assert not src.supports("https://jobs.ashbyhq.com/ashby/abc", "<html/>")
-    assert not src.supports("https://example.com/job", None)
+    assert supports_static("https://example.com/job", "<p>x</p>")
+    assert extract_static("https://example.com/job", "<p>x</p>") == (None, "<p>x</p>")
+    assert not supports_static("https://jobs.ashbyhq.com/ashby/abc", "<html/>")
+    assert not supports_static("https://example.com/job", None)
 
 
 def test_routing_prefers_jsonld_over_ashby_api(monkeypatch):
-    """Ashby page WITH ld+json: JsonLd wins, the board api is never called."""
+    """Ashby page WITH ld+json: jsonld wins, the board api is never called."""
     def boom(url, **kw):
         raise AssertionError(f"unexpected GET {url}")
     monkeypatch.setattr(requests, "get", boom)
-    fetcher = WebpageFetcher(
-        [JsonLdSource(), AshbyBoardSource(), GreenhouseSource(), StaticSource()],
-        page_get=lambda url: LD_PAGE)
 
-    md = fetcher.fetch("https://jobs.ashbyhq.com/ashby/abc")
+    md = fetch("https://jobs.ashbyhq.com/ashby/abc", page_get=lambda url: LD_PAGE)
 
     assert "Pilot Job" in md
 
@@ -230,11 +223,9 @@ def test_ashby_url_without_ldjson_routes_to_board_api(monkeypatch):
     monkeypatch.setattr(
         requests, "get",
         lambda url, **kw: SimpleNamespace(status_code=200, content=json.dumps(BOARD).encode()))
-    fetcher = WebpageFetcher(
-        [JsonLdSource(), AshbyBoardSource(), StaticSource()],
-        page_get=lambda url: "<html><body>ashby js shell</body></html>")
 
-    md = fetcher.fetch("https://jobs.ashbyhq.com/ashby/abc-1")
+    md = fetch("https://jobs.ashbyhq.com/ashby/abc-1",
+               page_get=lambda url: "<html><body>ashby js shell</body></html>")
 
     assert "Board Job" in md
 
@@ -246,10 +237,8 @@ def test_failed_page_get_still_routes_to_ashby_board_api(monkeypatch):
         lambda url, **kw: SimpleNamespace(status_code=200, content=json.dumps(BOARD).encode()))
     def fail(url):
         raise FetchBlocked(403, "forbidden", url)
-    fetcher = WebpageFetcher(
-        [JsonLdSource(), AshbyBoardSource(), StaticSource()], page_get=fail)
 
-    md = fetcher.fetch("https://jobs.ashbyhq.com/ashby/abc-1")
+    md = fetch("https://jobs.ashbyhq.com/ashby/abc-1", page_get=fail)
 
     assert "Board Job" in md
 
@@ -257,45 +246,41 @@ def test_failed_page_get_still_routes_to_ashby_board_api(monkeypatch):
 def test_failed_page_get_non_ashby_raises_page_status():
     def fail(url):
         raise FetchBlocked(403, "forbidden", url)
-    fetcher = WebpageFetcher(
-        [JsonLdSource(), AshbyBoardSource(), StaticSource()], page_get=fail)
 
     with pytest.raises(FetchBlocked) as exc_info:
-        fetcher.fetch("https://example.com/job")
+        fetch("https://example.com/job", page_get=fail)
 
     assert exc_info.value.status == 403
 
 
 def test_extract_failure_falls_through_to_next_source():
-    failing = StubSource(supports=True, exc=FetchBlocked(503, "api down", "u"))
-    backup = StubSource(supports=True, result=(None, "<p>page</p>"))
-    fetcher = WebpageFetcher([failing, backup], page_get=lambda url: "<html/>")
+    f_sup, f_ext, _ = stub_source(supports=True, exc=FetchBlocked(503, "api down", "u"))
+    b_sup, b_ext, b_calls = stub_source(supports=True, result=(None, "<p>page</p>"))
 
-    md = fetcher.fetch("https://x/job")
+    md = fetch("https://x/job", sources=[(f_sup, f_ext), (b_sup, b_ext)],
+               page_get=lambda url: "<html/>")
 
     assert "page" in md
-    assert len(backup.extract_calls) == 1
+    assert len(b_calls) == 1
 
 
 def test_extract_failure_without_fallback_raises_extract_error():
-    fetcher = WebpageFetcher(
-        [StubSource(supports=True, exc=FetchBlocked(503, "api down", "u"))],
-        page_get=lambda url: "<html/>")
+    sup, ext, _ = stub_source(supports=True, exc=FetchBlocked(503, "api down", "u"))
 
     with pytest.raises(FetchBlocked) as exc_info:
-        fetcher.fetch("https://x/job")
+        fetch("https://x/job", sources=[(sup, ext)], page_get=lambda url: "<html/>")
 
     assert exc_info.value.status == 503
 
 
 def test_no_matching_source_raises_without_extracting():
-    src = StubSource(supports=False)
-    fetcher = WebpageFetcher([src], page_get=lambda url: "<html/>")
+    sup, ext, calls = stub_source(supports=False)
 
     with pytest.raises(FetchBlocked):
-        fetcher.fetch("https://example.com/job")
+        fetch("https://example.com/job", sources=[(sup, ext)],
+              page_get=lambda url: "<html/>")
 
-    assert src.extract_calls == []
+    assert calls == []
 
 
 def test_main_prints_markdown_and_returns_it(monkeypatch, capsys):
