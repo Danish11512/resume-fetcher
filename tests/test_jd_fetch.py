@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
-from utils.jd_fetch import (
+from jd_fetch import (
     AshbyBoardSource, FetchBlocked, GreenhouseSource, JsonLdSource, StaticSource,
     WebpageFetcher, get_page, main, render_markdown,
 )
@@ -298,34 +298,35 @@ def test_no_matching_source_raises_without_extracting():
     assert src.extract_calls == []
 
 
-def test_main_prints_markdown_and_returns_zero(monkeypatch, capsys):
+def test_main_prints_markdown_and_returns_it(monkeypatch, capsys):
     monkeypatch.setattr(
         requests, "get",
         lambda url, **kw: SimpleNamespace(status_code=200, content=LD_PAGE.encode()))
 
-    rc = main(["https://jobs.ashbyhq.com/ashby/abc"])
+    md = main(["https://jobs.ashbyhq.com/ashby/abc"])
 
-    assert rc == 0
+    assert isinstance(md, str)
+    assert "Pilot Job" in md
     assert "Pilot Job" in capsys.readouterr().out
 
 
-def test_main_returns_one_on_http_failure(monkeypatch, capsys):
+def test_main_returns_none_on_http_failure(monkeypatch, capsys):
     monkeypatch.setattr(
         requests, "get",
         lambda url, **kw: SimpleNamespace(status_code=403, text="denied"))
 
     rc = main(["https://example.com/careers/123"])
 
-    assert rc == 1
+    assert rc is None
     assert "403" in capsys.readouterr().err
 
 
-def test_main_returns_one_on_connection_error(monkeypatch, capsys):
+def test_main_returns_none_on_connection_error(monkeypatch, capsys):
     def boom(url, **kw):
         raise requests.ConnectionError("refused")
     monkeypatch.setattr(requests, "get", boom)
 
     rc = main(["https://example.com/job"])
 
-    assert rc == 1
+    assert rc is None
     assert "error:" in capsys.readouterr().err

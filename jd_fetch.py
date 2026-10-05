@@ -202,8 +202,8 @@ class WebpageFetcher:
         raise last_err or FetchBlocked(200, "no source matched this page", url)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI: jd_fetch.py <url> — markdown to stdout. 0 on success, 1 on failure."""
+def main(argv: list[str] | None = None) -> str | None:
+    """Fetch argv's <url> as markdown: print to stdout, return it; None on failure."""
     parser = argparse.ArgumentParser(description="Fetch a job description as markdown.")
     parser.add_argument("url")
     args = parser.parse_args(argv)
@@ -211,12 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     fetcher = WebpageFetcher(
         [JsonLdSource(), AshbyBoardSource(), GreenhouseSource(), StaticSource()])
     try:
-        print(fetcher.fetch(args.url))
+        md = fetcher.fetch(args.url)
     except FetchBlocked as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        return None
+    print(md)
+    return md
